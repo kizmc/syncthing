@@ -40,7 +40,7 @@ func main() {
 			log.Fatal(err)
 		}
 		log.Printf("*** Have index for repo %q node %q", *repo, n)
-		fs.WithHave(n, func(f scanner.File) bool {
+		fs.WithHave(n, 0, func(f scanner.File) bool {
 			fmt.Println(f)
 			return true
 		})

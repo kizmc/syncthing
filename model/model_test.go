@@ -185,6 +185,8 @@ func (f FakeConnection) Option(string) string {
 
 func (FakeConnection) Index(string, []protocol.FileInfo) {}
 
+func (FakeConnection) IndexUpdate(string, []protocol.FileInfo) {}
+
 func (f FakeConnection) Request(repo, name string, offset int64, size int) ([]byte, error) {
 	return f.requestData, nil
 }

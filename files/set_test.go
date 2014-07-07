@@ -48,7 +48,7 @@ func globalList(s *files.Set) []scanner.File {
 
 func haveList(s *files.Set, n protocol.NodeID) []scanner.File {
 	var fs []scanner.File
-	s.WithHave(n, func(f scanner.File) bool {
+	s.WithHave(n, 0, func(f scanner.File) bool {
 		fs = append(fs, f)
 		return true
 	})

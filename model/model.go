@@ -35,6 +35,8 @@ const (
 	RepoCleaning
 )
 
+const indexTxBatch = 10000
+
 // Somewhat arbitrary amount of bytes that we choose to let represent the size
 // of an unsynchronized directory entry or a deleted file. We need it to be
 // larger than zero so that it's visible that there is some amount of bytes to
@@ -257,7 +259,7 @@ func (m *Model) LocalSize(repo string) (files, deleted int, bytes int64) {
 	m.rmut.RLock()
 	defer m.rmut.RUnlock()
 	if rf, ok := m.repoFiles[repo]; ok {
-		rf.WithHave(protocol.LocalNodeID, func(f scanner.File) bool {
+		rf.WithHave(protocol.LocalNodeID, 0, func(f scanner.File) bool {
 			fs, de, by := sizeOfFile(f)
 			files += fs
 			deleted += de
@@ -434,14 +436,14 @@ func (m *Model) Request(nodeID protocol.NodeID, repo, name string, offset int64,
 	lf := r.Get(protocol.LocalNodeID, name)
 	if lf.Suppressed || protocol.IsDeleted(lf.Flags) {
 		if debug {
-			l.Debugf("REQ(in): %s: %q / %q o=%d s=%d; invalid: %v", nodeID, repo, name, offset, size, lf)
+			l.Debugf("REQ(in; invalid): %s: %q / %q o=%d s=%d: %v", nodeID, repo, name, offset, size, lf)
 		}
 		return nil, ErrInvalid
 	}
 
-	if offset > lf.Size {
+	if offset+int64(size) > lf.Size {
 		if debug {
-			l.Debugf("REQ(in; nonexistent): %s: %q o=%d s=%d", nodeID, name, offset, size)
+			l.Debugf("REQ(in; nonexistent): %s: %q / %q o=%d s=%d", nodeID, repo, name, offset, size)
 		}
 		return nil, ErrNoSuchFile
 	}
@@ -525,54 +527,12 @@ func (m *Model) AddConnection(rawConn io.Closer, protoConn protocol.Connection) 
 	cm := m.clusterConfig(nodeID)
 	protoConn.ClusterConfig(cm)
 
-	var idxToSend = make(map[string][]protocol.FileInfo)
-
 	m.rmut.RLock()
 	for _, repo := range m.nodeRepos[nodeID] {
-		idxToSend[repo] = m.protocolIndex(repo)
+		fs := m.repoFiles[repo]
+		go m.sendIndexTo(0, repo, fs, protoConn, true)
 	}
 	m.rmut.RUnlock()
-
-	go func() {
-		for repo, idx := range idxToSend {
-			if debug {
-				l.Debugf("IDX(out/initial): %s: %q: %d files", nodeID, repo, len(idx))
-			}
-			const batchSize = 1000
-			for i := 0; i < len(idx); i += batchSize {
-				if len(idx[i:]) < batchSize {
-					protoConn.Index(repo, idx[i:])
-				} else {
-					protoConn.Index(repo, idx[i:i+batchSize])
-				}
-			}
-		}
-	}()
-}
-
-// protocolIndex returns the current local index in protocol data types.
-func (m *Model) protocolIndex(repo string) []protocol.FileInfo {
-	var index []protocol.FileInfo
-
-	var fs []scanner.File
-	m.repoFiles[repo].WithHave(protocol.LocalNodeID, func(f scanner.File) bool {
-		fs = append(fs, f)
-		return true
-	})
-
-	for _, f := range fs {
-		mf := fileInfoFromFile(f)
-		if debug {
-			var flagComment string
-			if protocol.IsDeleted(mf.Flags) {
-				flagComment = " (deleted)"
-			}
-			l.Debugf("IDX(out): %q/%q m=%d f=%o%s v=%d (%d blocks)", repo, mf.Name, mf.Modified, mf.Flags, flagComment, mf.Version, len(mf.Blocks))
-		}
-		index = append(index, mf)
-	}
-
-	return index
 }
 
 func (m *Model) updateLocal(repo string, f scanner.File) {
@@ -598,7 +558,6 @@ func (m *Model) requestGlobal(nodeID protocol.NodeID, repo, name string, offset 
 }
 
 func (m *Model) broadcastIndexLoop() {
-	// TODO: Rewrite to send index in segments
 	var lastChange = map[string]uint64{}
 	for {
 		time.Sleep(5 * time.Second)
@@ -609,26 +568,21 @@ func (m *Model) broadcastIndexLoop() {
 		var indexWg sync.WaitGroup
 		for repo, fs := range m.repoFiles {
 			repo := repo
+			fs := fs
 
+			since := lastChange[repo]
 			c := fs.Changes(protocol.LocalNodeID)
-			if c == lastChange[repo] {
-				continue
-			}
-			lastChange[repo] = c
+			if c != since {
+				lastChange[repo] = c
 
-			idx := m.protocolIndex(repo)
-
-			for _, nodeID := range m.repoNodes[repo] {
-				nodeID := nodeID
-				if conn, ok := m.protoConn[nodeID]; ok {
-					indexWg.Add(1)
-					if debug {
-						l.Debugf("IDX(out/loop): %s: %d files", nodeID, len(idx))
+				for _, nodeID := range m.repoNodes[repo] {
+					if conn, ok := m.protoConn[nodeID]; ok {
+						indexWg.Add(1)
+						go func() {
+							m.sendIndexTo(since, repo, fs, conn, false)
+							indexWg.Done()
+						}()
 					}
-					go func() {
-						conn.Index(repo, idx)
-						indexWg.Done()
-					}()
 				}
 			}
 		}
@@ -637,6 +591,41 @@ func (m *Model) broadcastIndexLoop() {
 		m.pmut.RUnlock()
 
 		indexWg.Wait()
+	}
+}
+
+func (m *Model) sendIndexTo(since uint64, repo string, fs *files.Set, conn protocol.Connection, initial bool) {
+	batch := make([]protocol.FileInfo, 0, indexTxBatch)
+	fs.WithHave(protocol.LocalNodeID, since, func(f scanner.File) bool {
+		pf := fileInfoFromFile(f)
+		batch = append(batch, pf)
+		if len(batch) == indexTxBatch {
+			if initial {
+				if debug {
+					l.Debugf("IDX(out): %q -> %s (%d files) (initial)", repo, conn.ID(), len(batch))
+				}
+				conn.Index(repo, batch)
+				initial = false
+			} else {
+				if debug {
+					l.Debugf("IDXUP(out): %q -> %s (%d files)", repo, conn.ID(), len(batch))
+				}
+				conn.IndexUpdate(repo, batch)
+			}
+			batch = batch[:0]
+		}
+		return true
+	})
+	if initial {
+		if debug {
+			l.Debugf("IDX(out): %q -> %s (%d files) (initial/final)", repo, conn.ID(), len(batch))
+		}
+		conn.Index(repo, batch)
+	} else if len(batch) > 0 {
+		if debug {
+			l.Debugf("IDXUP(out): %q -> %s (%d files) (final)", repo, conn.ID(), len(batch))
+		}
+		conn.IndexUpdate(repo, batch)
 	}
 }
 

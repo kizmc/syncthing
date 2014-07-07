@@ -68,6 +68,7 @@ type Model interface {
 type Connection interface {
 	ID() NodeID
 	Index(repo string, files []FileInfo)
+	IndexUpdate(repo string, files []FileInfo)
 	Request(repo string, name string, offset int64, size int) ([]byte, error)
 	ClusterConfig(config ClusterConfigMessage)
 	Statistics() Statistics
@@ -89,9 +90,6 @@ type rawConnection struct {
 
 	awaiting    []chan asyncResult
 	awaitingMut sync.Mutex
-
-	idxSent map[string]map[string]uint64
-	idxMut  sync.Mutex // ensures serialization of Index calls
 
 	nextID chan int
 	outbox chan []encodable
@@ -132,7 +130,6 @@ func NewConnection(nodeID NodeID, reader io.Reader, writer io.Writer, receiver M
 		wb:       wb,
 		xw:       xdr.NewWriter(wb),
 		awaiting: make([]chan asyncResult, 0x1000),
-		idxSent:  make(map[string]map[string]uint64),
 		outbox:   make(chan []encodable),
 		nextID:   make(chan int),
 		closed:   make(chan struct{}),
@@ -153,34 +150,13 @@ func (c *rawConnection) ID() NodeID {
 
 // Index writes the list of file information to the connected peer node
 func (c *rawConnection) Index(repo string, idx []FileInfo) {
-	c.idxMut.Lock()
-	defer c.idxMut.Unlock()
+	c.send(header{0, -1, messageTypeIndex}, IndexMessage{repo, idx})
+}
 
-	var msgType int
-	if c.idxSent[repo] == nil {
-		// This is the first time we send an index.
-		msgType = messageTypeIndex
-
-		c.idxSent[repo] = make(map[string]uint64)
-		for _, f := range idx {
-			c.idxSent[repo][f.Name] = f.Version
-		}
-	} else {
-		// We have sent one full index. Only send updates now.
-		msgType = messageTypeIndexUpdate
-		var diff []FileInfo
-		for _, f := range idx {
-			if vs, ok := c.idxSent[repo][f.Name]; !ok || f.Version != vs {
-				diff = append(diff, f)
-				c.idxSent[repo][f.Name] = f.Version
-			}
-		}
-		idx = diff
-	}
-
-	if msgType == messageTypeIndex || len(idx) > 0 {
-		c.send(header{0, -1, msgType}, IndexMessage{repo, idx})
-	}
+// IndexUpdate writes the list of file information to the connected peer node
+// as an index update
+func (c *rawConnection) IndexUpdate(repo string, idx []FileInfo) {
+	c.send(header{0, -1, messageTypeIndexUpdate}, IndexMessage{repo, idx})
 }
 
 // Request returns the bytes for the specified block after fetching them from the connected peer.

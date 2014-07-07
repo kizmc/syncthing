@@ -18,7 +18,7 @@ go build http.go
 start() {
 	echo "Starting..."
 	for i in 1 2 3 4 ; do
-		STTRACE=files,model,puller STPROFILER=":909$i" syncthing -home "h$i" > "$i.out" 2>&1 &
+		STPROFILER=":909$i" syncthing -home "h$i" > "$i.out" 2>&1 &
 	done
 
 	# Test REST API

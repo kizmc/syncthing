@@ -19,14 +19,19 @@ func (c wireFormatConnection) ID() NodeID {
 }
 
 func (c wireFormatConnection) Index(repo string, fs []FileInfo) {
-	var myFs = make([]FileInfo, len(fs))
-	copy(myFs, fs)
-
 	for i := range fs {
-		myFs[i].Name = norm.NFC.String(filepath.ToSlash(myFs[i].Name))
+		fs[i].Name = norm.NFC.String(filepath.ToSlash(fs[i].Name))
 	}
 
-	c.next.Index(repo, myFs)
+	c.next.Index(repo, fs)
+}
+
+func (c wireFormatConnection) IndexUpdate(repo string, fs []FileInfo) {
+	for i := range fs {
+		fs[i].Name = norm.NFC.String(filepath.ToSlash(fs[i].Name))
+	}
+
+	c.next.IndexUpdate(repo, fs)
 }
 
 func (c wireFormatConnection) Request(repo, name string, offset int64, size int) ([]byte, error) {
