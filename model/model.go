@@ -560,7 +560,6 @@ func (m *Model) broadcastIndexLoop() {
 				if conn, ok := m.protoConn[nodeID]; ok {
 					repo := repo
 					fs := fs
-					nodeID := nodeID
 					conn := conn
 					key := fmt.Sprintf("%s/%s", repo, nodeID)
 

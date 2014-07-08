@@ -300,7 +300,6 @@ func (c *rawConnection) readerLoop() (err error) {
 
 type incomingIndex struct {
 	update bool
-	id     NodeID
 	repo   string
 	files  []FileInfo
 }
@@ -319,15 +318,15 @@ func (c *rawConnection) indexSerializerLoop() {
 		select {
 		case ii := <-c.incomingIndexes:
 			if debug {
-				l.Debugf("> incoming index %s %q update=%v (%d items)", ii.id, ii.repo, ii.update, len(ii.files))
+				l.Debugf("> incoming index %s %q update=%v (%d items)", c.id, ii.repo, ii.update, len(ii.files))
 			}
 			if ii.update {
-				c.receiver.IndexUpdate(ii.id, ii.repo, ii.files)
+				c.receiver.IndexUpdate(c.id, ii.repo, ii.files)
 			} else {
-				c.receiver.Index(ii.id, ii.repo, ii.files)
+				c.receiver.Index(c.id, ii.repo, ii.files)
 			}
 			if debug {
-				l.Debugf("< incoming index %s %q update=%v (%d items)", ii.id, ii.repo, ii.update, len(ii.files))
+				l.Debugf("< incoming index %s %q update=%v (%d items)", c.id, ii.repo, ii.update, len(ii.files))
 			}
 		case <-c.closed:
 			return
@@ -352,7 +351,7 @@ func (c *rawConnection) handleIndex() error {
 		// update and can't receive the large index update from the
 		// other side.
 
-		c.incomingIndexes <- incomingIndex{false, c.id, im.Repository, im.Files}
+		c.incomingIndexes <- incomingIndex{false, im.Repository, im.Files}
 	}
 	return nil
 }
@@ -366,7 +365,7 @@ func (c *rawConnection) handleIndexUpdate() error {
 		if debug {
 			l.Debugf("IndexUpdate %s %q (%d items)", c.id, im.Repository, len(im.Files))
 		}
-		c.incomingIndexes <- incomingIndex{true, c.id, im.Repository, im.Files}
+		c.incomingIndexes <- incomingIndex{true, im.Repository, im.Files}
 	}
 	return nil
 }
