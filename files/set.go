@@ -34,6 +34,15 @@ func NewSet(repo string, db *leveldb.DB) *Set {
 		repo:    repo,
 		db:      db,
 	}
+
+	var nodeID protocol.NodeID
+	ldbWithAll(db, []byte(repo), func(ts uint64, node []byte, f scanner.File) {
+		copy(nodeID[:], node)
+		if ts > s.changes[nodeID] {
+			s.changes[nodeID] = ts
+		}
+	})
+
 	return &s
 }
 

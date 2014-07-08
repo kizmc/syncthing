@@ -192,10 +192,14 @@ func (p *puller) run() {
 		default:
 		}
 
-		if v := p.model.Version(p.repoCfg.ID); v > prevVer {
+		curVer := p.model.Version(p.repoCfg.ID)
+		if debug {
+			l.Debugf("curVer=%d prevVer=%d", curVer, prevVer)
+		}
+		if curVer > prevVer {
 			// Queue more blocks to fetch, if any
 			p.queueNeededBlocks()
-			prevVer = v
+			prevVer = curVer
 		}
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -74,6 +75,9 @@ type Model struct {
 
 	addedRepo bool
 	started   bool
+
+	lastChange map[string]uint64
+	lcMut      sync.Mutex
 }
 
 var (
@@ -101,6 +105,7 @@ func NewModel(indexDir string, cfg *config.Configuration, clientName, clientVers
 		rawConn:       make(map[protocol.NodeID]io.Closer),
 		nodeVer:       make(map[protocol.NodeID]string),
 		sup:           suppressor{threshold: int64(cfg.Options.MaxChangeKbps)},
+		lastChange:    make(map[string]uint64),
 	}
 
 	var timeout = 20 * 60 // seconds
@@ -276,8 +281,17 @@ func (m *Model) LocalSize(repo string) (files, deleted int, bytes int64) {
 
 // NeedSize returns the number and total size of currently needed files.
 func (m *Model) NeedSize(repo string) (files int, bytes int64) {
-	f, d, b := sizeOf(m.NeedFilesRepo(repo, -1))
-	return f + d, b
+	m.rmut.RLock()
+	defer m.rmut.RUnlock()
+	if rf, ok := m.repoFiles[repo]; ok {
+		rf.WithNeed(protocol.LocalNodeID, func(f scanner.File) bool {
+			fs, de, by := sizeOfFile(f)
+			files += fs + de
+			bytes += by
+			return true
+		})
+	}
+	return
 }
 
 // NeedFiles returns the list of currently needed files
@@ -291,7 +305,7 @@ func (m *Model) NeedFilesRepo(repo string, max int) []scanner.File {
 		}
 		rf.WithNeed(protocol.LocalNodeID, func(f scanner.File) bool {
 			fs = append(fs, f)
-			return len(fs) < max
+			return max <= 0 || len(fs) < max
 		})
 		if r := m.repoCfgs[repo].FileRanker(); r != nil {
 			files.SortBy(r).Sort(fs)
@@ -411,6 +425,15 @@ func (m *Model) Close(node protocol.NodeID, err error) {
 	delete(m.rawConn, node)
 	delete(m.nodeVer, node)
 	m.pmut.Unlock()
+
+	nodeStr := node.String()
+	m.lcMut.Lock()
+	for k := range m.lastChange {
+		if strings.HasPrefix(k, nodeStr) {
+			m.lastChange[k] = 0
+		}
+	}
+	m.lcMut.Unlock()
 }
 
 // Request returns the specified data segment by reading it from local disk.
@@ -523,8 +546,9 @@ func (m *Model) AddConnection(rawConn io.Closer, protoConn protocol.Connection) 
 
 func (m *Model) updateLocal(repo string, f scanner.File) {
 	m.rmut.RLock()
-	m.repoFiles[repo].Update(protocol.LocalNodeID, []scanner.File{f})
+	fs := m.repoFiles[repo]
 	m.rmut.RUnlock()
+	fs.Update(protocol.LocalNodeID, []scanner.File{f})
 }
 
 func (m *Model) requestGlobal(nodeID protocol.NodeID, repo, name string, offset int64, size int, hash []byte) ([]byte, error) {
@@ -544,9 +568,6 @@ func (m *Model) requestGlobal(nodeID protocol.NodeID, repo, name string, offset 
 }
 
 func (m *Model) broadcastIndexLoop() {
-	var lastChange = map[string]uint64{}
-	var lcMut sync.Mutex
-
 	for {
 		time.Sleep(5 * time.Second)
 
@@ -561,11 +582,11 @@ func (m *Model) broadcastIndexLoop() {
 					repo := repo
 					fs := fs
 					conn := conn
-					key := fmt.Sprintf("%s/%s", repo, nodeID)
+					key := fmt.Sprintf("%s/%s", nodeID, repo)
 
-					lcMut.Lock()
-					sentChange, ok := lastChange[key]
-					lcMut.Unlock()
+					m.lcMut.Lock()
+					sentChange, ok := m.lastChange[key]
+					m.lcMut.Unlock()
 
 					if debug {
 						l.Debugf("broadcast index %s sentChange=%d curChange=%d ok=%v", key, sentChange, curChange, ok)
@@ -576,9 +597,9 @@ func (m *Model) broadcastIndexLoop() {
 						go func() {
 							initial := sentChange == 0
 							maxTs := m.sendIndexTo(sentChange, repo, fs, conn, initial)
-							lcMut.Lock()
-							lastChange[key] = maxTs
-							lcMut.Unlock()
+							m.lcMut.Lock()
+							m.lastChange[key] = maxTs
+							m.lcMut.Unlock()
 							if debug {
 								l.Debugf("broadcast index %s maxTs=%d", key, maxTs)
 							}
@@ -614,7 +635,7 @@ func (m *Model) sendIndexTo(since uint64, repo string, fs *files.Set, conn proto
 				}
 				conn.IndexUpdate(repo, batch)
 			}
-			batch = batch[:0]
+			batch = make([]protocol.FileInfo, 0, indexTxBatch)
 		}
 		return true
 	})

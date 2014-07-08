@@ -388,6 +388,30 @@ func ldbWithHave(db *leveldb.DB, repo, node []byte, since uint64, fn fileIterato
 	return maxTs
 }
 
+func ldbWithAll(db *leveldb.DB, repo []byte, fn func(ts uint64, node []byte, f scanner.File)) {
+	start := nodeKey(repo, nil, nil)                                                                                                                                                                                                                               // before all repo/node files
+	limit := nodeKey(repo, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, []byte{0xff, 0xff, 0xff, 0xff}) // after all repo/node files
+	snap, err := db.GetSnapshot()
+	if err != nil {
+		panic(err)
+	}
+	defer snap.Release()
+	dbi := snap.NewIterator(&util.Range{Start: start, Limit: limit}, nil)
+	defer dbi.Release()
+
+	for dbi.Next() {
+		var f scanner.File
+		node := dbi.Key()[65 : 65+32]
+		bs := dbi.Value()
+		ts := binary.BigEndian.Uint64(bs[:8])
+		err := f.UnmarshalXDR(bs[8:])
+		if err != nil {
+			panic(err)
+		}
+		fn(ts, node, f)
+	}
+}
+
 func ldbGet(db *leveldb.DB, repo, node, file []byte) scanner.File {
 	nk := nodeKey(repo, node, file)
 	bs, err := db.Get(nk, nil)
