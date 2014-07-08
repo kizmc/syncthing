@@ -95,6 +95,8 @@ type rawConnection struct {
 	outbox chan []encodable
 	closed chan struct{}
 	once   sync.Once
+
+	incomingIndexes chan incomingIndex
 }
 
 type asyncResult struct {
@@ -119,20 +121,21 @@ func NewConnection(nodeID NodeID, reader io.Reader, writer io.Writer, receiver M
 	wb := bufio.NewWriter(flwr)
 
 	c := rawConnection{
-		id:       nodeID,
-		receiver: nativeModel{receiver},
-		state:    stateInitial,
-		reader:   flrd,
-		cr:       cr,
-		xr:       xdr.NewReader(flrd),
-		writer:   flwr,
-		cw:       cw,
-		wb:       wb,
-		xw:       xdr.NewWriter(wb),
-		awaiting: make([]chan asyncResult, 0x1000),
-		outbox:   make(chan []encodable),
-		nextID:   make(chan int),
-		closed:   make(chan struct{}),
+		id:              nodeID,
+		receiver:        nativeModel{receiver},
+		state:           stateInitial,
+		reader:          flrd,
+		cr:              cr,
+		xr:              xdr.NewReader(flrd),
+		writer:          flwr,
+		cw:              cw,
+		wb:              wb,
+		xw:              xdr.NewWriter(wb),
+		awaiting:        make([]chan asyncResult, 0x1000),
+		outbox:          make(chan []encodable),
+		nextID:          make(chan int),
+		closed:          make(chan struct{}),
+		incomingIndexes: make(chan incomingIndex, 100), // should be enough for anyone, right?
 	}
 
 	go c.indexSerializerLoop()
@@ -236,6 +239,9 @@ func (c *rawConnection) readerLoop() (err error) {
 		if hdr.version != 0 {
 			return fmt.Errorf("protocol error: %s: unknown message version %#x", c.id, hdr.version)
 		}
+		if debug {
+			l.Debugln("header:", hdr)
+		}
 
 		switch hdr.msgType {
 		case messageTypeIndex:
@@ -299,9 +305,10 @@ type incomingIndex struct {
 	files  []FileInfo
 }
 
-var incomingIndexes = make(chan incomingIndex, 100) // should be enough for anyone, right?
-
 func (c *rawConnection) indexSerializerLoop() {
+	if debug {
+		l.Debugf("indexSerializerLoop starting %s", c.id)
+	}
 	// We must avoid blocking the reader loop when processing large indexes.
 	// There is otherwise a potential deadlock where both sides has the model
 	// locked because it's sending a large index update and can't receive the
@@ -310,11 +317,17 @@ func (c *rawConnection) indexSerializerLoop() {
 	// routine and buffered channel.
 	for {
 		select {
-		case ii := <-incomingIndexes:
+		case ii := <-c.incomingIndexes:
+			if debug {
+				l.Debugf("> incoming index %s %q update=%v (%d items)", ii.id, ii.repo, ii.update, len(ii.files))
+			}
 			if ii.update {
 				c.receiver.IndexUpdate(ii.id, ii.repo, ii.files)
 			} else {
 				c.receiver.Index(ii.id, ii.repo, ii.files)
+			}
+			if debug {
+				l.Debugf("< incoming index %s %q update=%v (%d items)", ii.id, ii.repo, ii.update, len(ii.files))
 			}
 		case <-c.closed:
 			return
@@ -328,6 +341,9 @@ func (c *rawConnection) handleIndex() error {
 	if err := c.xr.Error(); err != nil {
 		return err
 	} else {
+		if debug {
+			l.Debugf("Index %s %q (%d items)", c.id, im.Repository, len(im.Files))
+		}
 
 		// We run this (and the corresponding one for update, below)
 		// in a separate goroutine to avoid blocking the read loop.
@@ -336,7 +352,7 @@ func (c *rawConnection) handleIndex() error {
 		// update and can't receive the large index update from the
 		// other side.
 
-		incomingIndexes <- incomingIndex{false, c.id, im.Repository, im.Files}
+		c.incomingIndexes <- incomingIndex{false, c.id, im.Repository, im.Files}
 	}
 	return nil
 }
@@ -347,7 +363,10 @@ func (c *rawConnection) handleIndexUpdate() error {
 	if err := c.xr.Error(); err != nil {
 		return err
 	} else {
-		incomingIndexes <- incomingIndex{true, c.id, im.Repository, im.Files}
+		if debug {
+			l.Debugf("IndexUpdate %s %q (%d items)", c.id, im.Repository, len(im.Files))
+		}
+		c.incomingIndexes <- incomingIndex{true, c.id, im.Repository, im.Files}
 	}
 	return nil
 }

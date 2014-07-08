@@ -598,7 +598,7 @@ func (p *puller) handleEmptyBlock(b bqBlock) {
 
 func (p *puller) queueNeededBlocks() {
 	queued := 0
-	for _, f := range p.model.NeedFilesRepo(p.repoCfg.ID) {
+	for _, f := range p.model.NeedFilesRepo(p.repoCfg.ID, indexTxBatch) {
 		lf := p.model.CurrentRepoFile(p.repoCfg.ID, f.Name)
 		have, need := scanner.BlockDiff(lf.Blocks, f.Blocks)
 		if debug {
