@@ -594,3 +594,36 @@ func TestChanges(t *testing.T) {
 		t.Fatal("Change number should be unchanged")
 	}
 }
+
+func TestReloadedChanges(t *testing.T) {
+	db, err := leveldb.Open(storage.NewMemStorage(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fs := []scanner.File{
+		scanner.File{Name: "a", Version: 1000},
+		scanner.File{Name: "b", Version: 1000},
+		scanner.File{Name: "c", Version: 1000},
+		scanner.File{Name: "d", Version: 1000},
+	}
+
+	s0 := files.NewSet("test", db)
+	s0.ReplaceWithDelete(protocol.LocalNodeID, fs)
+	c0 := s0.Changes(protocol.LocalNodeID)
+	s0.ReplaceWithDelete(remoteNode, fs)
+	c1 := s0.Changes(remoteNode)
+	if c0 == c1 {
+		t.Fatalf("%d == %d", c0, c1)
+	}
+
+	s1 := files.NewSet("test", db)
+	c2 := s1.Changes(protocol.LocalNodeID)
+	c3 := s1.Changes(remoteNode)
+	if c2 != c0 {
+		t.Fatalf("%d != %d", c2, c0)
+	}
+	if c3 != c1 {
+		t.Fatalf("%d != %d", c3, c1)
+	}
+}
