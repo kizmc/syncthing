@@ -3,6 +3,7 @@ package files
 import (
 	"bytes"
 	"sort"
+	"sync"
 
 	"github.com/calmh/syncthing/lamport"
 	"github.com/calmh/syncthing/protocol"
@@ -11,6 +12,22 @@ import (
 	"github.com/syndtr/goleveldb/leveldb/opt"
 	"github.com/syndtr/goleveldb/leveldb/util"
 )
+
+var (
+	clockTick int64
+	clockMut  sync.Mutex
+)
+
+func clock(v int64) int64 {
+	clockMut.Lock()
+	defer clockMut.Unlock()
+	if v > clockTick {
+		clockTick = v + 1
+	} else {
+		clockTick++
+	}
+	return clockTick
+}
 
 const (
 	keyTypeNode = iota
@@ -256,6 +273,9 @@ func ldbInsert(batch dbWriter, repo, node, name []byte, file protocol.FileInfo) 
 	if debug {
 		l.Debugf("insert; repo=%q node=%x %v", repo, node, file)
 	}
+
+	ts := clock(0)
+	file.LocalVer = ts
 
 	nk := nodeKey(repo, node, name)
 	batch.Put(nk, file.MarshalXDR())

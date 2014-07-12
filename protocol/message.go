@@ -17,6 +17,7 @@ type FileInfo struct {
 	Modified int64
 	Version  uint64
 	Blocks   []BlockInfo // max:1000000
+	LocalVer int64
 }
 
 func (f FileInfo) String() string {

@@ -93,6 +93,7 @@ func (o FileInfo) encodeXDR(xw *xdr.Writer) (int, error) {
 	for i := range o.Blocks {
 		o.Blocks[i].encodeXDR(xw)
 	}
+	xw.WriteUint64(uint64(o.LocalVer))
 	return xw.Tot(), xw.Error()
 }
 
@@ -120,6 +121,7 @@ func (o *FileInfo) decodeXDR(xr *xdr.Reader) error {
 	for i := range o.Blocks {
 		(&o.Blocks[i]).decodeXDR(xr)
 	}
+	o.LocalVer = int64(xr.ReadUint64())
 	return xr.Error()
 }
 
