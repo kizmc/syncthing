@@ -60,13 +60,13 @@ func TestEventAfterSubscribe(t *testing.T) {
 	if ev.Type != events.NodeConnected {
 		t.Error("Incorrect event type", ev.Type)
 	}
-	switch v := ev.Meta.(type) {
+	switch v := ev.Data.(type) {
 	case string:
 		if v != "foo" {
-			t.Error("Incorrect meta string", v)
+			t.Error("Incorrect Data string", v)
 		}
 	default:
-		t.Errorf("Incorrect meta type %#v", v)
+		t.Errorf("Incorrect Data type %#v", v)
 	}
 }
 
@@ -127,7 +127,7 @@ func TestIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal("Unexpected error:", err)
 	}
-	if ev.Meta.(string) != "foo" {
+	if ev.Data.(string) != "foo" {
 		t.Fatal("Incorrect event:", ev)
 	}
 	id := ev.ID
@@ -136,7 +136,7 @@ func TestIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal("Unexpected error:", err)
 	}
-	if ev.Meta.(string) != "bar" {
+	if ev.Data.(string) != "bar" {
 		t.Fatal("Incorrect event:", ev)
 	}
 	if !(ev.ID > id) {

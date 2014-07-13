@@ -10,18 +10,24 @@ import (
 type EventType uint64
 
 const (
-	NodeConnected = 1 << iota
+	Ping = 1 << iota
+	StartupComplete
+	NodeConnected
 	NodeDisconnected
 	LocalIndexUpdated
 	RemoteIndexUpdated
 	ItemStarted
 	ItemCompleted
 
-	AllEvents = NodeConnected | NodeDisconnected | LocalIndexUpdated | RemoteIndexUpdated | ItemStarted | ItemCompleted
+	AllEvents = ^EventType(0)
 )
 
 func (t EventType) String() string {
 	switch t {
+	case Ping:
+		return "Ping"
+	case StartupComplete:
+		return "StartupComplete"
 	case NodeConnected:
 		return "NodeConnected"
 	case NodeDisconnected:
@@ -39,6 +45,10 @@ func (t EventType) String() string {
 	}
 }
 
+func (t EventType) MarshalText() ([]byte, error) {
+	return []byte(t.String()), nil
+}
+
 const BufferSize = 64
 
 type Logger struct {
@@ -48,10 +58,10 @@ type Logger struct {
 }
 
 type Event struct {
-	ID   int
-	Time time.Time
-	Type EventType
-	Meta interface{}
+	ID   int         `json:"id"`
+	Time time.Time   `json:"time"`
+	Type EventType   `json:"type"`
+	Data interface{} `json:"data"`
 }
 
 type Subscription struct {
@@ -74,13 +84,13 @@ func NewLogger() *Logger {
 	}
 }
 
-func (l *Logger) Log(t EventType, meta interface{}) {
+func (l *Logger) Log(t EventType, data interface{}) {
 	l.mutex.Lock()
 	e := Event{
 		ID:   l.nextId,
 		Time: time.Now(),
 		Type: t,
-		Meta: meta,
+		Data: data,
 	}
 	l.nextId++
 	for _, s := range l.subs {
