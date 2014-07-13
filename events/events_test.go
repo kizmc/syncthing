@@ -1,11 +1,14 @@
 package events_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/calmh/syncthing/events"
 )
+
+var timeout = 100 * time.Millisecond
 
 func TestNewLogger(t *testing.T) {
 	l := events.NewLogger()
@@ -25,9 +28,9 @@ func TestSubscriber(t *testing.T) {
 func TestTimeout(t *testing.T) {
 	l := events.NewLogger()
 	s := l.Subscribe(0)
-	ev, ok := s.Poll(100 * time.Millisecond)
-	if ok {
-		t.Fatal("Unexpected OK poll, event:", ev)
+	_, err := s.Poll(timeout)
+	if err != events.ErrTimeout {
+		t.Fatal("Unexpected non-Timeout error:", err)
 	}
 }
 
@@ -37,10 +40,9 @@ func TestEventBeforeSubscribe(t *testing.T) {
 	l.Log(events.NodeConnected, "foo")
 	s := l.Subscribe(0)
 
-	ev, ok := s.Poll(100 * time.Millisecond)
-
-	if ok {
-		t.Fatal("Unexpected OK poll, event:", ev)
+	_, err := s.Poll(timeout)
+	if err != events.ErrTimeout {
+		t.Fatal("Unexpected non-Timeout error:", err)
 	}
 }
 
@@ -50,10 +52,10 @@ func TestEventAfterSubscribe(t *testing.T) {
 	s := l.Subscribe(events.AllEvents)
 	l.Log(events.NodeConnected, "foo")
 
-	ev, ok := s.Poll(100 * time.Millisecond)
+	ev, err := s.Poll(timeout)
 
-	if !ok {
-		t.Fatal("Unexpected failed poll")
+	if err != nil {
+		t.Fatal("Unexpected error:", err)
 	}
 	if ev.Type != events.NodeConnected {
 		t.Error("Incorrect event type", ev.Type)
@@ -74,10 +76,9 @@ func TestEventAfterSubscribeIgnoreMask(t *testing.T) {
 	s := l.Subscribe(events.NodeDisconnected)
 	l.Log(events.NodeConnected, "foo")
 
-	ev, ok := s.Poll(100 * time.Millisecond)
-
-	if ok {
-		t.Fatal("Unexpected OK poll, event:", ev)
+	_, err := s.Poll(timeout)
+	if err != events.ErrTimeout {
+		t.Fatal("Unexpected non-Timeout error:", err)
 	}
 }
 
@@ -90,7 +91,7 @@ func TestBufferOverflow(t *testing.T) {
 	for i := 0; i < events.BufferSize*2; i++ {
 		l.Log(events.NodeConnected, "foo")
 	}
-	if time.Since(t0) > 100*time.Millisecond {
+	if time.Since(t0) > timeout {
 		t.Fatalf("Logging took too long")
 	}
 }
@@ -101,17 +102,17 @@ func TestUnsubscribe(t *testing.T) {
 	s := l.Subscribe(events.AllEvents)
 	l.Log(events.NodeConnected, "foo")
 
-	_, ok := s.Poll(100 * time.Millisecond)
-	if !ok {
-		t.Fatal("Unexpected failed poll")
+	_, err := s.Poll(timeout)
+	if err != nil {
+		t.Fatal("Unexpected error:", err)
 	}
 
 	l.Unsubscribe(s)
 	l.Log(events.NodeConnected, "foo")
 
-	ev, ok := s.Poll(100 * time.Millisecond)
-	if ok {
-		t.Fatal("Unexpected OK poll, event:", ev)
+	_, err = s.Poll(timeout)
+	if err != events.ErrClosed {
+		t.Fatal("Unexpected non-Closed error:", err)
 	}
 }
 
@@ -122,18 +123,18 @@ func TestIDs(t *testing.T) {
 	l.Log(events.NodeConnected, "foo")
 	l.Log(events.NodeConnected, "bar")
 
-	ev, ok := s.Poll(100 * time.Millisecond)
-	if !ok {
-		t.Fatal("Unexpected failed poll")
+	ev, err := s.Poll(timeout)
+	if err != nil {
+		t.Fatal("Unexpected error:", err)
 	}
 	if ev.Meta.(string) != "foo" {
 		t.Fatal("Incorrect event:", ev)
 	}
 	id := ev.ID
 
-	ev, ok = s.Poll(100 * time.Millisecond)
-	if !ok {
-		t.Fatal("Unexpected failed poll")
+	ev, err = s.Poll(timeout)
+	if err != nil {
+		t.Fatal("Unexpected error:", err)
 	}
 	if ev.Meta.(string) != "bar" {
 		t.Fatal("Incorrect event:", ev)
@@ -141,4 +142,33 @@ func TestIDs(t *testing.T) {
 	if !(ev.ID > id) {
 		t.Fatalf("ID not incremented (%d !> %d)", ev.ID, id)
 	}
+}
+
+func TestBufferedSub(t *testing.T) {
+	l := events.NewLogger()
+
+	s := l.Subscribe(events.AllEvents)
+	bs := events.NewBufferedSubscription(s, 10*events.BufferSize)
+
+	go func() {
+		for i := 0; i < 10*events.BufferSize; i++ {
+			l.Log(events.NodeConnected, fmt.Sprintf("event-%d", i))
+			if i%30 == 0 {
+				// Give the buffer routine time to pick up the events
+				time.Sleep(20 * time.Millisecond)
+			}
+		}
+	}()
+
+	recv := 0
+	for recv < 10*events.BufferSize {
+		evs := bs.Since(recv, nil)
+		for _, ev := range evs {
+			if ev.ID != recv+1 {
+				t.Fatalf("Incorrect ID; %d != %d", ev.ID, recv+1)
+			}
+			recv = ev.ID
+		}
+	}
+
 }
