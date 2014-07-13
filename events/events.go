@@ -18,6 +18,23 @@ const (
 	AllEvents = NodeConnected | NodeDisconnected | LocalIndexUpdated | RemoteIndexUpdated | ItemStarted | ItemCompleted
 )
 
+func (t EventType) String() {
+	switch t {
+	case NodeConnected:
+		return "NodeConnected"
+	case NodeDisconnected:
+		return "NodeDisconnected"
+	case LocalIndexUpdated:
+		return "LocalIndexUpdated"
+	case RemoteIndexUpdated:
+		return "RemoteIndexUpdated"
+	case ItemStarted:
+		return "ItemStarted"
+	case ItemCompleted:
+		return "ItemCompleted"
+	}
+}
+
 const BufferSize = 64
 
 type Logger struct {
@@ -28,6 +45,7 @@ type Logger struct {
 
 type Event struct {
 	ID   int
+	Time time.Time
 	Type EventType
 	Meta interface{}
 }
@@ -64,6 +82,7 @@ func (l *Logger) Log(t EventType, meta interface{}) {
 	l.mutex.Lock()
 	e := Event{
 		ID:   l.nextId,
+		Time: time.Now,
 		Type: t,
 		Meta: meta,
 	}
